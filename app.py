@@ -322,6 +322,12 @@ def main_screen(storage: Storage, user: User) -> None:
                 st.error("시험 범위 PDF를 한 개 이상 올려주세요.")
             elif not exam_types:
                 st.error("출제 유형을 한 개 이상 선택해주세요.")
+            elif (
+                not user.is_admin
+                and storage.generation_count_today(user.id)
+                >= int(secret("DAILY_GENERATION_LIMIT", "3"))
+            ):
+                st.error("오늘의 문제집 생성 횟수를 모두 사용했습니다. 내일 다시 이용해주세요.")
             else:
                 file_payloads = [(file.name, file.getvalue()) for file in uploaded_files]
                 activity_id = storage.start_activity(
@@ -374,6 +380,10 @@ def main_screen(storage: Storage, user: User) -> None:
             '<div class="privacy-note" style="margin-top:1rem">개인정보 안내 · 이름과 마스킹 군번, 생성 요청 메타데이터는 서비스 운영을 위해 저장되며 관리자에게 공개됩니다. 업로드한 PDF 원문과 생성된 결과 전문은 운영 기록에 저장하지 않습니다.</div>',
             unsafe_allow_html=True,
         )
+        if not user.is_admin:
+            daily_limit = int(secret("DAILY_GENERATION_LIMIT", "3"))
+            used_today = storage.generation_count_today(user.id)
+            st.caption(f"오늘 생성 {used_today}/{daily_limit}회 · 과도한 API 사용을 막기 위한 계정별 한도입니다.")
 
     if admin_tab is not None:
         with admin_tab:

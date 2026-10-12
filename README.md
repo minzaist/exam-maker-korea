@@ -35,6 +35,7 @@ OPENAI_MODEL = "gpt-4.1"
 AUTH_PEPPER = "충분히 긴 임의 문자열"
 ADMIN_SERVICE_NUMBER = "관리자 군번"
 ADMIN_NAME = "관리자 이름"
+DAILY_GENERATION_LIMIT = 3
 ```
 
 기본 저장소는 SQLite입니다. Community Cloud의 로컬 파일은 앱 재부팅·재배포 시 초기화될 수 있으므로 장기 운영에는 외부 영구 DB 연결이 필요합니다.
@@ -44,3 +45,4 @@ ADMIN_NAME = "관리자 이름"
 - 군번 원문은 DB에 저장하지 않고 HMAC 지문과 마스킹 값만 저장합니다.
 - PDF 원문과 생성된 문제·답안 전문은 운영 로그에 저장하지 않습니다.
 - 가입 화면과 홈 화면에 관리자 열람 범위를 명시합니다.
+- API 비용 오남용을 줄이기 위해 일반 계정은 기본 하루 3회로 제한합니다.

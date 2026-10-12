@@ -84,3 +84,4 @@ def test_storage_signup_login_and_admin(tmp_path: Path) -> None:
     activity = storage.start_activity(user.id, ["lecture.pdf"], ["객관식"], 12, "과목", "3장 강조")
     storage.finish_activity(activity, "결과")
     assert storage.list_activities()[0]["status"] == "완료"
+    assert storage.generation_count_today(user.id) == 1

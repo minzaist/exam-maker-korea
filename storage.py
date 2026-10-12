@@ -225,3 +225,12 @@ class Storage:
             total = db.execute("SELECT COUNT(*) FROM activities").fetchone()[0]
             completed = db.execute("SELECT COUNT(*) FROM activities WHERE status='완료'").fetchone()[0]
         return {"users": int(users), "total": int(total), "completed": int(completed)}
+
+    def generation_count_today(self, user_id: int) -> int:
+        today_prefix = datetime.now(timezone.utc).date().isoformat()
+        with self._lock, self._connect() as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM activities WHERE user_id=? AND created_at LIKE ?",
+                (user_id, f"{today_prefix}%"),
+            ).fetchone()[0]
+        return int(count)
