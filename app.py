@@ -95,7 +95,6 @@ def complete_login(
         expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
         cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
         st.session_state.auth_token = token
-    st.rerun()
 
 
 def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) -> None:
@@ -117,6 +116,7 @@ def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) 
                     else:
                         if user:
                             complete_login(storage, cookies, user, remember, "직접 로그인")
+                            return
                         st.error("군번 또는 이름을 확인해주세요.")
         with signup_tab:
             with st.form("signup_form", clear_on_submit=False):
@@ -136,6 +136,7 @@ def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) 
                         st.error(str(exc))
                     else:
                         complete_login(storage, cookies, user, remember, "회원가입")
+                        return
     st.markdown("</div>", unsafe_allow_html=True)
 
 
