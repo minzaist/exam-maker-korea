@@ -85,3 +85,9 @@ def test_storage_signup_login_and_admin(tmp_path: Path) -> None:
     storage.finish_activity(activity, "결과")
     assert storage.list_activities()[0]["status"] == "완료"
     assert storage.generation_count_today(user.id) == 1
+    storage.record_login(user.id, "직접 로그인", "Test Browser")
+    assert storage.list_login_events()[0]["name"] == "홍길동"
+    token = storage.create_auth_session(user.id)
+    assert storage.restore_auth_session(token) == user
+    storage.revoke_auth_session(token)
+    assert storage.restore_auth_session(token) is None

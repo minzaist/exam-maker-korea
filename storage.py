@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -94,6 +95,24 @@ class Storage:
                     error_message TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_activities_created_at ON activities(created_at DESC);
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token_hash TEXT UNIQUE NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    revoked_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS login_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    user_agent TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash);
+                CREATE INDEX IF NOT EXISTS idx_login_events_created_at ON login_events(created_at DESC);
                 """
             )
         if self.admin_service_number and self.admin_name:
@@ -156,6 +175,64 @@ class Storage:
         with self._lock, self._connect() as db:
             row = db.execute("SELECT * FROM users WHERE fingerprint=?", (fingerprint,)).fetchone()
         return self._row_to_user(row) if row else None
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create_auth_session(self, user_id: int, days: int = 30) -> str:
+        token = secrets.token_urlsafe(48)
+        now = datetime.now(timezone.utc)
+        with self._lock, self._connect() as db:
+            db.execute(
+                """INSERT INTO auth_sessions
+                   (user_id, token_hash, created_at, expires_at, last_seen_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (user_id, self._token_hash(token), now.isoformat(), (now + timedelta(days=days)).isoformat(), now.isoformat()),
+            )
+        return token
+
+    def restore_auth_session(self, token: str) -> User | None:
+        if not token:
+            return None
+        now = self._now()
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                """SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id
+                   WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? LIMIT 1""",
+                (self._token_hash(token), now),
+            ).fetchone()
+            if row:
+                db.execute(
+                    "UPDATE auth_sessions SET last_seen_at=? WHERE token_hash=?",
+                    (now, self._token_hash(token)),
+                )
+        return self._row_to_user(row) if row else None
+
+    def revoke_auth_session(self, token: str) -> None:
+        if token:
+            with self._lock, self._connect() as db:
+                db.execute(
+                    "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=?",
+                    (self._now(), self._token_hash(token)),
+                )
+
+    def record_login(self, user_id: int, method: str, user_agent: str = "") -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "INSERT INTO login_events (user_id, created_at, method, user_agent) VALUES (?, ?, ?, ?)",
+                (user_id, self._now(), method[:30], user_agent[:500]),
+            )
+
+    def list_login_events(self, limit: int = 500) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                """SELECT e.*, u.name, u.masked_service_number
+                   FROM login_events e JOIN users u ON u.id=e.user_id
+                   ORDER BY e.id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def start_activity(
         self,
@@ -366,6 +443,87 @@ class SupabaseStorage:
     def login(self, service_number: str, name: str) -> User | None:
         row = self._find_by_fingerprint(self._fingerprint(service_number, name))
         return self._row_to_user(row) if row else None
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create_auth_session(self, user_id: int, days: int = 30) -> str:
+        token = secrets.token_urlsafe(48)
+        now = datetime.now(timezone.utc)
+        self.client.table("auth_sessions").insert(
+            {
+                "user_id": user_id,
+                "token_hash": self._token_hash(token),
+                "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(days=days)).isoformat(),
+                "last_seen_at": now.isoformat(),
+            }
+        ).execute()
+        return token
+
+    def restore_auth_session(self, token: str) -> User | None:
+        if not token:
+            return None
+        now = self._now()
+        response = (
+            self.client.table("auth_sessions")
+            .select("token_hash,users(id,name,masked_service_number,is_admin)")
+            .eq("token_hash", self._token_hash(token))
+            .is_("revoked_at", "null")
+            .gt("expires_at", now)
+            .limit(1)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return None
+        account = rows[0].get("users") or {}
+        if not account:
+            return None
+        (
+            self.client.table("auth_sessions")
+            .update({"last_seen_at": now})
+            .eq("token_hash", self._token_hash(token))
+            .execute()
+        )
+        return self._row_to_user(account)
+
+    def revoke_auth_session(self, token: str) -> None:
+        if token:
+            (
+                self.client.table("auth_sessions")
+                .update({"revoked_at": self._now()})
+                .eq("token_hash", self._token_hash(token))
+                .execute()
+            )
+
+    def record_login(self, user_id: int, method: str, user_agent: str = "") -> None:
+        self.client.table("login_events").insert(
+            {
+                "user_id": user_id,
+                "created_at": self._now(),
+                "method": method[:30],
+                "user_agent": user_agent[:500],
+            }
+        ).execute()
+
+    def list_login_events(self, limit: int = 500) -> list[dict[str, Any]]:
+        response = (
+            self.client.table("login_events")
+            .select("*,users(name,masked_service_number)")
+            .order("id", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        result: list[dict[str, Any]] = []
+        for raw in response.data or []:
+            item = dict(raw)
+            account = item.pop("users", {}) or {}
+            item["name"] = account.get("name", "")
+            item["masked_service_number"] = account.get("masked_service_number", "")
+            result.append(item)
+        return result
 
     def start_activity(
         self,

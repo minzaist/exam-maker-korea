@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 
 from exports import (
     make_answer_pdf,
@@ -21,6 +23,8 @@ from ui import CSS, card_header
 
 APP_DIR = Path(__file__).resolve().parent
 EXAM_TYPES = ["객관식", "단답형", "서술형", "논술형", "OX형", "빈칸 채우기", "사례 분석형"]
+AUTH_COOKIE = "exam_maker_session"
+AUTH_DAYS = 30
 
 
 def secret(name: str, default: str = "") -> str:
@@ -70,7 +74,31 @@ def init() -> Storage | SupabaseStorage:
     )
 
 
-def login_screen(storage: Storage | SupabaseStorage) -> None:
+def browser_user_agent() -> str:
+    try:
+        return str(st.context.headers.get("User-Agent", ""))
+    except Exception:
+        return ""
+
+
+def complete_login(
+    storage: Storage | SupabaseStorage,
+    cookies: CookieController,
+    user: User,
+    remember: bool,
+    method: str,
+) -> None:
+    storage.record_login(user.id, method, browser_user_agent())
+    st.session_state.user = user
+    if remember:
+        token = storage.create_auth_session(user.id, AUTH_DAYS)
+        expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
+        cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
+        st.session_state.auth_token = token
+    st.rerun()
+
+
+def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) -> None:
     st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="login-logo">📝</div><div class="login-title">시험제작소</div><div class="login-copy">강의자료가 공부하기 좋은 문제집으로 바뀌어요.</div>', unsafe_allow_html=True)
     with st.container(border=True):
@@ -79,6 +107,7 @@ def login_screen(storage: Storage | SupabaseStorage) -> None:
             with st.form("login_form", clear_on_submit=False):
                 service_number = st.text_input("군번", placeholder="예: 24-12345678")
                 name = st.text_input("이름", placeholder="이름을 입력하세요")
+                remember = st.checkbox("이 브라우저에서 로그인 유지 (30일)", value=True)
                 submitted = st.form_submit_button("로그인", type="primary", use_container_width=True)
                 if submitted:
                     try:
@@ -87,18 +116,18 @@ def login_screen(storage: Storage | SupabaseStorage) -> None:
                         st.error(str(exc))
                     else:
                         if user:
-                            st.session_state.user = user
-                            st.rerun()
+                            complete_login(storage, cookies, user, remember, "직접 로그인")
                         st.error("군번 또는 이름을 확인해주세요.")
         with signup_tab:
             with st.form("signup_form", clear_on_submit=False):
                 service_number = st.text_input("군번", placeholder="예: 24-12345678", key="signup_number")
                 name = st.text_input("이름", placeholder="실명을 입력하세요", key="signup_name")
                 st.markdown(
-                    '<div class="privacy-note">계정 식별을 위해 이름과 마스킹된 군번을 저장합니다. 문제 생성 시 파일명, 선택 유형, 문항 수, 추가 요청, 처리 결과가 운영 기록에 남고 관리자에게 공개됩니다. PDF 원문과 생성된 문제 전문은 기록에 저장하지 않습니다.</div>',
+                    '<div class="privacy-note">계정 식별을 위해 이름과 마스킹된 군번을 저장합니다. 로그인 시각·방식·브라우저 정보와 문제 생성 메타데이터가 운영 기록에 남고 관리자에게 공개됩니다. 군번 원문, PDF 원문, 생성된 문제 전문은 저장하지 않습니다.</div>',
                     unsafe_allow_html=True,
                 )
                 consent = st.checkbox("위 개인정보 처리 및 운영 기록 안내에 동의합니다.")
+                remember = st.checkbox("이 브라우저에서 로그인 유지 (30일)", value=True, key="signup_remember")
                 submitted = st.form_submit_button("가입하고 시작하기", type="primary", use_container_width=True)
                 if submitted:
                     try:
@@ -106,12 +135,11 @@ def login_screen(storage: Storage | SupabaseStorage) -> None:
                     except (ValueError, RuntimeError) as exc:
                         st.error(str(exc))
                     else:
-                        st.session_state.user = user
-                        st.rerun()
+                        complete_login(storage, cookies, user, remember, "회원가입")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_header(user: User) -> None:
+def render_header(storage: Storage | SupabaseStorage, cookies: CookieController, user: User) -> None:
     admin_tag = " · 관리자" if user.is_admin else ""
     st.markdown(
         f"""
@@ -125,6 +153,9 @@ def render_header(user: User) -> None:
     left, right = st.columns([8, 2])
     with right:
         if st.button("로그아웃", use_container_width=True):
+            token = st.session_state.get("auth_token") or st.context.cookies.get(AUTH_COOKIE, "")
+            storage.revoke_auth_session(str(token))
+            cookies.remove(AUTH_COOKIE, secure=True, same_site="strict")
             for key in list(st.session_state):
                 del st.session_state[key]
             st.rerun()
@@ -260,36 +291,59 @@ def render_admin(storage: Storage | SupabaseStorage) -> None:
     c1.metric("가입 계정", stats["users"])
     c2.metric("전체 요청", stats["total"])
     c3.metric("완료", stats["completed"])
-    rows = storage.list_activities()
-    if not rows:
-        st.info("아직 생성 기록이 없습니다.")
-        return
-    display = []
-    for row in rows:
-        display.append(
-            {
-                "시간(UTC)": row["created_at"],
-                "계정": f"{row['name']} · {row['masked_service_number']}",
-                "파일": ", ".join(row["file_names"]),
-                "유형": ", ".join(row["exam_types"]),
-                "문항": row["question_count"],
-                "제목 힌트": row["title_hint"],
-                "추가 요청": row["additional_notes"],
-                "상태": row["status"],
-                "결과": row["result_title"],
-            }
-        )
-    st.dataframe(display, use_container_width=True, hide_index=True)
-    st.download_button(
-        "운영 기록 JSON 내려받기",
-        data=json.dumps(rows, ensure_ascii=False, indent=2),
-        file_name="시험제작소_운영기록.json",
-        mime="application/json",
-    )
+    generation_tab, login_tab = st.tabs(["문제 생성 기록", "로그인 기록"])
+    with generation_tab:
+        rows = storage.list_activities()
+        if not rows:
+            st.info("아직 생성 기록이 없습니다.")
+        else:
+            display = []
+            for row in rows:
+                display.append(
+                    {
+                        "시간(UTC)": row["created_at"],
+                        "계정": f"{row['name']} · {row['masked_service_number']}",
+                        "파일": ", ".join(row["file_names"]),
+                        "유형": ", ".join(row["exam_types"]),
+                        "문항": row["question_count"],
+                        "제목 힌트": row["title_hint"],
+                        "추가 요청": row["additional_notes"],
+                        "상태": row["status"],
+                        "결과": row["result_title"],
+                    }
+                )
+            st.dataframe(display, use_container_width=True, hide_index=True)
+            st.download_button(
+                "문제 생성 기록 내려받기",
+                data=json.dumps(rows, ensure_ascii=False, indent=2),
+                file_name="시험제작소_문제생성기록.json",
+                mime="application/json",
+            )
+    with login_tab:
+        login_rows = storage.list_login_events()
+        if not login_rows:
+            st.info("아직 로그인 기록이 없습니다.")
+        else:
+            login_display = [
+                {
+                    "시간(UTC)": row["created_at"],
+                    "계정": f"{row['name']} · {row['masked_service_number']}",
+                    "방식": row["method"],
+                    "브라우저": row["user_agent"],
+                }
+                for row in login_rows
+            ]
+            st.dataframe(login_display, use_container_width=True, hide_index=True)
+            st.download_button(
+                "로그인 기록 내려받기",
+                data=json.dumps(login_rows, ensure_ascii=False, indent=2),
+                file_name="시험제작소_로그인기록.json",
+                mime="application/json",
+            )
 
 
-def main_screen(storage: Storage | SupabaseStorage, user: User) -> None:
-    render_header(user)
+def main_screen(storage: Storage | SupabaseStorage, cookies: CookieController, user: User) -> None:
+    render_header(storage, cookies, user)
     if user.is_admin:
         home_tab, admin_tab = st.tabs(["문제 만들기", "운영 기록"])
     else:
@@ -398,7 +452,7 @@ def main_screen(storage: Storage | SupabaseStorage, user: User) -> None:
                 unsafe_allow_html=True,
             )
         st.markdown(
-            '<div class="privacy-note" style="margin-top:1rem">개인정보 안내 · 이름과 마스킹 군번, 생성 요청 메타데이터는 서비스 운영을 위해 저장되며 관리자에게 공개됩니다. 업로드한 PDF 원문과 생성된 결과 전문은 운영 기록에 저장하지 않습니다.</div>',
+            '<div class="privacy-note" style="margin-top:1rem">개인정보 안내 · 이름과 마스킹 군번, 로그인 기록, 생성 요청 메타데이터는 서비스 운영을 위해 저장되며 관리자에게 공개됩니다. 군번 원문, 업로드한 PDF 원문과 생성된 결과 전문은 운영 기록에 저장하지 않습니다.</div>',
             unsafe_allow_html=True,
         )
         if not user.is_admin:
@@ -413,11 +467,21 @@ def main_screen(storage: Storage | SupabaseStorage, user: User) -> None:
 
 def main() -> None:
     storage = init()
+    cookies = CookieController(key="exam_maker_cookie_controller")
     user = st.session_state.get("user")
     if not isinstance(user, User):
-        login_screen(storage)
+        token = str(st.context.cookies.get(AUTH_COOKIE, "") or "")
+        if token:
+            restored = storage.restore_auth_session(token)
+            if restored:
+                st.session_state.user = restored
+                st.session_state.auth_token = token
+                storage.record_login(restored.id, "자동 로그인", browser_user_agent())
+                user = restored
+    if not isinstance(user, User):
+        login_screen(storage, cookies)
         return
-    main_screen(storage, user)
+    main_screen(storage, cookies, user)
 
 
 if __name__ == "__main__":
