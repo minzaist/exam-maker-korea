@@ -15,7 +15,7 @@ from exports import (
     validate_pdf_bytes,
 )
 from generator import GenerationError, generate_exam
-from storage import Storage, User
+from storage import Storage, SupabaseStorage, User
 from ui import CSS, card_header
 
 
@@ -37,21 +37,40 @@ def get_storage(
     pepper: str,
     admin_service_number: str,
     admin_name: str,
-) -> Storage:
+    supabase_url: str,
+    supabase_secret_key: str,
+) -> Storage | SupabaseStorage:
+    if supabase_url and supabase_secret_key:
+        return SupabaseStorage(
+            supabase_url,
+            supabase_secret_key,
+            pepper,
+            admin_service_number,
+            admin_name,
+        )
     return Storage(path, pepper, admin_service_number, admin_name)
 
 
-def init() -> Storage:
+def init() -> Storage | SupabaseStorage:
     st.set_page_config(page_title="시험제작소", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
     st.markdown(CSS, unsafe_allow_html=True)
     db_path = secret("DATABASE_PATH", str(APP_DIR / "data" / "exam_maker.db"))
     pepper = secret("AUTH_PEPPER", "local-development-pepper-change-in-deployment")
     admin_service_number = secret("ADMIN_SERVICE_NUMBER")
     admin_name = secret("ADMIN_NAME")
-    return get_storage(db_path, pepper, admin_service_number, admin_name)
+    supabase_url = secret("SUPABASE_URL")
+    supabase_secret_key = secret("SUPABASE_SECRET_KEY")
+    return get_storage(
+        db_path,
+        pepper,
+        admin_service_number,
+        admin_name,
+        supabase_url,
+        supabase_secret_key,
+    )
 
 
-def login_screen(storage: Storage) -> None:
+def login_screen(storage: Storage | SupabaseStorage) -> None:
     st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="login-logo">📝</div><div class="login-title">시험제작소</div><div class="login-copy">강의자료가 공부하기 좋은 문제집으로 바뀌어요.</div>', unsafe_allow_html=True)
     with st.container(border=True):
@@ -64,7 +83,7 @@ def login_screen(storage: Storage) -> None:
                 if submitted:
                     try:
                         user = storage.login(service_number, name)
-                    except ValueError as exc:
+                    except (ValueError, RuntimeError) as exc:
                         st.error(str(exc))
                     else:
                         if user:
@@ -84,7 +103,7 @@ def login_screen(storage: Storage) -> None:
                 if submitted:
                     try:
                         user = storage.signup(service_number, name, consent)
-                    except ValueError as exc:
+                    except (ValueError, RuntimeError) as exc:
                         st.error(str(exc))
                     else:
                         st.session_state.user = user
@@ -231,9 +250,11 @@ def render_results(data: dict, artifacts: dict, warnings: list[str]) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_admin(storage: Storage) -> None:
+def render_admin(storage: Storage | SupabaseStorage) -> None:
     st.markdown("### 운영 기록")
-    st.caption("가입 시 안내·동의한 범위의 메타데이터만 표시합니다. PDF 원문과 생성된 문제 전문은 저장하지 않습니다.")
+    st.caption(
+        f"가입 시 안내·동의한 범위의 메타데이터만 표시합니다. PDF 원문과 생성된 문제 전문은 저장하지 않습니다. · {storage.backend_name}"
+    )
     stats = storage.stats()
     c1, c2, c3 = st.columns(3)
     c1.metric("가입 계정", stats["users"])
@@ -267,7 +288,7 @@ def render_admin(storage: Storage) -> None:
     )
 
 
-def main_screen(storage: Storage, user: User) -> None:
+def main_screen(storage: Storage | SupabaseStorage, user: User) -> None:
     render_header(user)
     if user.is_admin:
         home_tab, admin_tab = st.tabs(["문제 만들기", "운영 기록"])

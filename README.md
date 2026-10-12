@@ -10,6 +10,7 @@
 - 문제집/해설 PDF 렌더링 교차검증
 - 한컴오피스에서 열 수 있는 DOCX 2종 ZIP 제공
 - 군번+이름 기반 가입·로그인(군번 원문은 저장하지 않음)
+- Supabase 영구 DB 연동으로 여러 컴퓨터에서 같은 계정 사용
 - 안내·동의를 받은 생성 메타데이터 관리자 대시보드
 
 ## 로컬 실행
@@ -27,7 +28,9 @@ streamlit run app.py
 
 ## 배포
 
-Streamlit Community Cloud에서 이 저장소의 `app.py`를 선택하고 Advanced settings의 Secrets에 아래 값을 입력합니다.
+1. Supabase 프로젝트의 SQL Editor에서 [`supabase_schema.sql`](supabase_schema.sql)을 한 번 실행합니다.
+2. Supabase의 Connect 또는 Settings > API Keys에서 Project URL과 서버용 Secret Key를 확인합니다.
+3. Streamlit Community Cloud에서 이 저장소의 `app.py`를 선택하고 Advanced settings의 Secrets에 아래 값을 입력합니다.
 
 ```toml
 OPENAI_API_KEY = "sk-..."
@@ -36,9 +39,11 @@ AUTH_PEPPER = "충분히 긴 임의 문자열"
 ADMIN_SERVICE_NUMBER = "관리자 군번"
 ADMIN_NAME = "관리자 이름"
 DAILY_GENERATION_LIMIT = 3
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_SECRET_KEY = "sb_secret_..."
 ```
 
-기본 저장소는 SQLite입니다. Community Cloud의 로컬 파일은 앱 재부팅·재배포 시 초기화될 수 있으므로 장기 운영에는 외부 영구 DB 연결이 필요합니다.
+`SUPABASE_URL`과 `SUPABASE_SECRET_KEY`가 있으면 Supabase를 사용하고, 없으면 로컬 개발용 SQLite로 자동 전환됩니다. Secret Key는 서버 전용이며 GitHub 저장소나 브라우저 코드에 넣으면 안 됩니다.
 
 ## 개인정보 설계
 
