@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_cookies_controller import CookieController
 
 from exports import (
@@ -95,6 +96,12 @@ def complete_login(
         expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
         cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
         st.session_state.auth_token = token
+        components.html(
+            "<script>setTimeout(() => window.parent.location.reload(), 700);</script>",
+            height=0,
+        )
+    else:
+        st.rerun()
 
 
 def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) -> None:
