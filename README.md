@@ -2,6 +2,8 @@
 
 대학 시험 범위 PDF를 분석해 예상문제집, 모범답안·해설, 출제 분석을 만들고 DOCX/PDF로 내려받는 Streamlit 앱입니다.
 
+**서비스 바로가기:** [exam-maker-korea.streamlit.app](https://exam-maker-korea.streamlit.app)
+
 ## 주요 기능
 
 - 여러 PDF 업로드와 출제 유형 다중 선택
@@ -10,7 +12,7 @@
 - 문제집/해설 PDF 렌더링 교차검증
 - 한컴오피스에서 열 수 있는 DOCX 2종 ZIP 제공
 - 군번+이름 기반 가입·로그인(군번 원문은 저장하지 않음)
-- `로그인 유지` 선택 시 30일간 안전한 세션 유지
+- `로그인 유지` 선택 시 브라우저 로컬 저장소와 서버 해시 세션을 이용해 30일간 로그인 유지
 - 로그인 시각·방식·브라우저 정보를 관리자 전용 화면에서 조회·내려받기
 - Supabase 영구 DB 연동으로 여러 컴퓨터에서 같은 계정 사용
 - 안내·동의를 받은 생성 메타데이터 관리자 대시보드
@@ -29,6 +31,8 @@ streamlit run app.py
 `.streamlit/secrets.toml`에 실제 OpenAI API 키와 충분히 긴 임의의 `AUTH_PEPPER`를 설정하세요.
 
 ## 배포
+
+현재 `main` 브랜치는 Streamlit Community Cloud에 자동 배포되며, 계정·로그인 이력·생성 기록은 Supabase에 영구 저장됩니다. 앱 서버가 재시작돼도 DB 데이터는 유지됩니다.
 
 1. Supabase 프로젝트의 SQL Editor에서 [`supabase_schema.sql`](supabase_schema.sql)을 한 번 실행합니다.
 2. Supabase의 Connect 또는 Settings > API Keys에서 Project URL과 서버용 Secret Key를 확인합니다.
