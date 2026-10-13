@@ -161,7 +161,11 @@ def render_header(storage: Storage | SupabaseStorage, cookies: CookieController,
     left, right = st.columns([8, 2])
     with right:
         if st.button("로그아웃", use_container_width=True):
-            token = st.session_state.get("auth_token") or st.context.cookies.get(AUTH_COOKIE, "")
+            token = (
+                st.session_state.get("auth_token")
+                or cookies.get(AUTH_COOKIE)
+                or st.context.cookies.get(AUTH_COOKIE, "")
+            )
             storage.revoke_auth_session(str(token))
             cookies.remove(AUTH_COOKIE, secure=True, same_site="strict")
             for key in list(st.session_state):
@@ -478,7 +482,7 @@ def main() -> None:
     cookies = CookieController(key="exam_maker_cookie_controller")
     user = st.session_state.get("user")
     if not isinstance(user, User):
-        token = str(st.context.cookies.get(AUTH_COOKIE, "") or "")
+        token = str(cookies.get(AUTH_COOKIE) or st.context.cookies.get(AUTH_COOKIE, "") or "")
         if token:
             restored = storage.restore_auth_session(token)
             if restored:
