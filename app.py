@@ -97,7 +97,7 @@ def complete_login(
         cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
         st.session_state.auth_token = token
         components.html(
-            "<script>setTimeout(() => window.parent.location.reload(), 700);</script>",
+            "<script>setTimeout(() => window.parent.location.reload(), 2500);</script>",
             height=0,
         )
     else:
