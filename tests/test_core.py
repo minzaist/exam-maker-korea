@@ -86,7 +86,16 @@ def test_storage_signup_login_and_admin(tmp_path: Path) -> None:
     assert storage.list_activities()[0]["status"] == "완료"
     assert storage.generation_count_today(user.id) == 1
     storage.record_login(user.id, "직접 로그인", "Test Browser")
-    assert storage.list_login_events()[0]["name"] == "홍길동"
+    login_event = storage.list_login_events()[0]
+    assert login_event["name"] == "홍길동"
+    try:
+        storage.delete_login_events([login_event["id"]], user.id)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("일반 계정이 로그인 기록을 삭제했습니다.")
+    assert storage.delete_login_events([login_event["id"]], admin.id) == 1
+    assert storage.list_login_events() == []
     token = storage.create_auth_session(user.id)
     assert storage.restore_auth_session(token) == user
     storage.revoke_auth_session(token)

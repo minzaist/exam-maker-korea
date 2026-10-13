@@ -234,6 +234,24 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def delete_login_events(self, event_ids: list[int], actor_user_id: int) -> int:
+        ids = sorted({int(event_id) for event_id in event_ids if int(event_id) > 0})
+        if not ids:
+            return 0
+        with self._lock, self._connect() as db:
+            actor = db.execute(
+                "SELECT is_admin FROM users WHERE id=?",
+                (actor_user_id,),
+            ).fetchone()
+            if not actor or not bool(actor["is_admin"]):
+                raise PermissionError("관리자만 로그인 기록을 삭제할 수 있습니다.")
+            placeholders = ",".join("?" for _ in ids)
+            cursor = db.execute(
+                f"DELETE FROM login_events WHERE id IN ({placeholders})",
+                ids,
+            )
+        return max(int(cursor.rowcount), 0)
+
     def start_activity(
         self,
         user_id: int,
@@ -524,6 +542,23 @@ class SupabaseStorage:
             item["masked_service_number"] = account.get("masked_service_number", "")
             result.append(item)
         return result
+
+    def delete_login_events(self, event_ids: list[int], actor_user_id: int) -> int:
+        ids = sorted({int(event_id) for event_id in event_ids if int(event_id) > 0})
+        if not ids:
+            return 0
+        actor_response = (
+            self.client.table("users")
+            .select("is_admin")
+            .eq("id", actor_user_id)
+            .limit(1)
+            .execute()
+        )
+        actors = actor_response.data or []
+        if not actors or not bool(actors[0].get("is_admin")):
+            raise PermissionError("관리자만 로그인 기록을 삭제할 수 있습니다.")
+        response = self.client.table("login_events").delete().in_("id", ids).execute()
+        return len(response.data or [])
 
     def start_activity(
         self,

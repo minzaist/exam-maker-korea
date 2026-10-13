@@ -312,7 +312,7 @@ def render_results(data: dict, artifacts: dict, warnings: list[str]) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_admin(storage: Storage | SupabaseStorage) -> None:
+def render_admin(storage: Storage | SupabaseStorage, user: User) -> None:
     st.markdown("### 운영 기록")
     st.caption(
         f"가입 시 안내·동의한 범위의 메타데이터만 표시합니다. PDF 원문과 생성된 문제 전문은 저장하지 않습니다. · {storage.backend_name}"
@@ -371,6 +371,36 @@ def render_admin(storage: Storage | SupabaseStorage) -> None:
                 file_name="시험제작소_로그인기록.json",
                 mime="application/json",
             )
+            with st.expander("로그인 기록 삭제"):
+                st.caption("선택한 기록은 즉시 삭제되며 복구할 수 없습니다.")
+                row_by_id = {int(row["id"]): row for row in login_rows}
+                selected_ids = st.multiselect(
+                    "삭제할 기록",
+                    options=list(row_by_id),
+                    format_func=lambda event_id: (
+                        f"{row_by_id[event_id]['created_at']} · "
+                        f"{row_by_id[event_id]['name']} · "
+                        f"{row_by_id[event_id]['method']}"
+                    ),
+                    placeholder="기록을 선택하세요",
+                )
+                confirm_delete = st.checkbox(
+                    f"선택한 {len(selected_ids)}개 기록의 영구 삭제를 확인합니다.",
+                    key="confirm_login_history_delete",
+                )
+                if st.button(
+                    "선택 기록 삭제",
+                    type="primary",
+                    disabled=not selected_ids or not confirm_delete,
+                    use_container_width=True,
+                ):
+                    try:
+                        deleted = storage.delete_login_events(selected_ids, user.id)
+                    except (PermissionError, RuntimeError) as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(f"로그인 기록 {deleted}개를 삭제했습니다.")
+                        st.rerun()
 
 
 def main_screen(
@@ -498,7 +528,7 @@ def main_screen(
 
     if admin_tab is not None:
         with admin_tab:
-            render_admin(storage)
+            render_admin(storage, user)
 
 
 def main() -> None:
