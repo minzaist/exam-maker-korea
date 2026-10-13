@@ -9,6 +9,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_cookies_controller import CookieController
+from streamlit_local_storage import LocalStorage
 
 from exports import (
     make_answer_pdf,
@@ -85,6 +86,7 @@ def browser_user_agent() -> str:
 def complete_login(
     storage: Storage | SupabaseStorage,
     cookies: CookieController,
+    local_storage: LocalStorage,
     user: User,
     remember: bool,
     method: str,
@@ -95,6 +97,7 @@ def complete_login(
         token = storage.create_auth_session(user.id, AUTH_DAYS)
         expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
         cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
+        local_storage.setItem(AUTH_COOKIE, token, key=f"remember_{user.id}")
         st.session_state.auth_token = token
         components.html(
             "<script>setTimeout(() => window.parent.location.reload(), 2500);</script>",
@@ -104,7 +107,11 @@ def complete_login(
         st.rerun()
 
 
-def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) -> None:
+def login_screen(
+    storage: Storage | SupabaseStorage,
+    cookies: CookieController,
+    local_storage: LocalStorage,
+) -> None:
     st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="login-logo">📝</div><div class="login-title">시험제작소</div><div class="login-copy">강의자료가 공부하기 좋은 문제집으로 바뀌어요.</div>', unsafe_allow_html=True)
     with st.container(border=True):
@@ -122,7 +129,7 @@ def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) 
                         st.error(str(exc))
                     else:
                         if user:
-                            complete_login(storage, cookies, user, remember, "직접 로그인")
+                            complete_login(storage, cookies, local_storage, user, remember, "직접 로그인")
                             return
                         st.error("군번 또는 이름을 확인해주세요.")
         with signup_tab:
@@ -142,12 +149,17 @@ def login_screen(storage: Storage | SupabaseStorage, cookies: CookieController) 
                     except (ValueError, RuntimeError) as exc:
                         st.error(str(exc))
                     else:
-                        complete_login(storage, cookies, user, remember, "회원가입")
+                        complete_login(storage, cookies, local_storage, user, remember, "회원가입")
                         return
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_header(storage: Storage | SupabaseStorage, cookies: CookieController, user: User) -> None:
+def render_header(
+    storage: Storage | SupabaseStorage,
+    cookies: CookieController,
+    local_storage: LocalStorage,
+    user: User,
+) -> None:
     admin_tag = " · 관리자" if user.is_admin else ""
     st.markdown(
         f"""
@@ -163,14 +175,21 @@ def render_header(storage: Storage | SupabaseStorage, cookies: CookieController,
         if st.button("로그아웃", use_container_width=True):
             token = (
                 st.session_state.get("auth_token")
+                or local_storage.getItem(AUTH_COOKIE)
                 or cookies.get(AUTH_COOKIE)
                 or st.context.cookies.get(AUTH_COOKIE, "")
             )
             storage.revoke_auth_session(str(token))
             cookies.remove(AUTH_COOKIE, secure=True, same_site="strict")
+            if local_storage.getItem(AUTH_COOKIE):
+                local_storage.deleteItem(AUTH_COOKIE, key="logout_auth")
             for key in list(st.session_state):
                 del st.session_state[key]
-            st.rerun()
+            components.html(
+                "<script>setTimeout(() => window.parent.location.reload(), 1500);</script>",
+                height=0,
+            )
+            st.stop()
 
 
 def render_question(question: dict) -> None:
@@ -354,8 +373,13 @@ def render_admin(storage: Storage | SupabaseStorage) -> None:
             )
 
 
-def main_screen(storage: Storage | SupabaseStorage, cookies: CookieController, user: User) -> None:
-    render_header(storage, cookies, user)
+def main_screen(
+    storage: Storage | SupabaseStorage,
+    cookies: CookieController,
+    local_storage: LocalStorage,
+    user: User,
+) -> None:
+    render_header(storage, cookies, local_storage, user)
     if user.is_admin:
         home_tab, admin_tab = st.tabs(["문제 만들기", "운영 기록"])
     else:
@@ -480,9 +504,15 @@ def main_screen(storage: Storage | SupabaseStorage, cookies: CookieController, u
 def main() -> None:
     storage = init()
     cookies = CookieController(key="exam_maker_cookie_controller")
+    local_storage = LocalStorage(key="exam_maker_local_storage")
     user = st.session_state.get("user")
     if not isinstance(user, User):
-        token = str(cookies.get(AUTH_COOKIE) or st.context.cookies.get(AUTH_COOKIE, "") or "")
+        token = str(
+            local_storage.getItem(AUTH_COOKIE)
+            or cookies.get(AUTH_COOKIE)
+            or st.context.cookies.get(AUTH_COOKIE, "")
+            or ""
+        )
         if token:
             restored = storage.restore_auth_session(token)
             if restored:
@@ -491,9 +521,9 @@ def main() -> None:
                 storage.record_login(restored.id, "자동 로그인", browser_user_agent())
                 user = restored
     if not isinstance(user, User):
-        login_screen(storage, cookies)
+        login_screen(storage, cookies, local_storage)
         return
-    main_screen(storage, cookies, user)
+    main_screen(storage, cookies, local_storage, user)
 
 
 if __name__ == "__main__":
