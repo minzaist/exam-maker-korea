@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_cookies_controller import CookieController
 from streamlit_local_storage import LocalStorage
 
@@ -85,8 +84,6 @@ def browser_user_agent() -> str:
 
 def complete_login(
     storage: Storage | SupabaseStorage,
-    cookies: CookieController,
-    local_storage: LocalStorage,
     user: User,
     remember: bool,
     method: str,
@@ -95,16 +92,25 @@ def complete_login(
     st.session_state.user = user
     if remember:
         token = storage.create_auth_session(user.id, AUTH_DAYS)
-        expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
+        st.session_state.auth_token = token
+        st.session_state.pending_auth_token = token
+    st.rerun()
+
+
+def persist_pending_auth(
+    cookies: CookieController,
+    local_storage: LocalStorage,
+    user: User,
+) -> None:
+    token = str(st.session_state.pop("pending_auth_token", "") or "")
+    if not token:
+        return
+    expires = datetime.now(timezone.utc) + timedelta(days=AUTH_DAYS)
+    try:
         cookies.set(AUTH_COOKIE, token, expires=expires, secure=True, same_site="strict")
         local_storage.setItem(AUTH_COOKIE, token, key=f"remember_{user.id}")
-        st.session_state.auth_token = token
-        components.html(
-            "<script>setTimeout(() => window.parent.location.reload(), 2500);</script>",
-            height=0,
-        )
-    else:
-        st.rerun()
+    except Exception:
+        st.warning("홈 화면에 접속했지만 로그인 유지 설정을 저장하지 못했습니다.")
 
 
 def login_screen(
@@ -129,7 +135,7 @@ def login_screen(
                         st.error(str(exc))
                     else:
                         if user:
-                            complete_login(storage, cookies, local_storage, user, remember, "직접 로그인")
+                            complete_login(storage, user, remember, "직접 로그인")
                             return
                         st.error("군번 또는 이름을 확인해주세요.")
         with signup_tab:
@@ -149,7 +155,7 @@ def login_screen(
                     except (ValueError, RuntimeError) as exc:
                         st.error(str(exc))
                     else:
-                        complete_login(storage, cookies, local_storage, user, remember, "회원가입")
+                        complete_login(storage, user, remember, "회원가입")
                         return
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -185,11 +191,8 @@ def render_header(
                 local_storage.deleteItem(AUTH_COOKIE, key="logout_auth")
             for key in list(st.session_state):
                 del st.session_state[key]
-            components.html(
-                "<script>setTimeout(() => window.parent.location.reload(), 1500);</script>",
-                height=0,
-            )
-            st.stop()
+            st.session_state.logout_pending = True
+            st.rerun()
 
 
 def render_question(question: dict) -> None:
@@ -535,6 +538,13 @@ def main() -> None:
     storage = init()
     cookies = CookieController(key="exam_maker_cookie_controller")
     local_storage = LocalStorage(key="exam_maker_local_storage")
+    if st.session_state.pop("logout_pending", False):
+        if cookies.get(AUTH_COOKIE):
+            cookies.remove(AUTH_COOKIE, secure=True, same_site="strict")
+        if local_storage.getItem(AUTH_COOKIE):
+            local_storage.deleteItem(AUTH_COOKIE, key="finish_logout_auth")
+        login_screen(storage, cookies, local_storage)
+        return
     user = st.session_state.get("user")
     if not isinstance(user, User):
         token = str(
@@ -553,6 +563,7 @@ def main() -> None:
     if not isinstance(user, User):
         login_screen(storage, cookies, local_storage)
         return
+    persist_pending_auth(cookies, local_storage, user)
     main_screen(storage, cookies, local_storage, user)
 
 
